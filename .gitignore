@@ -1,0 +1,11 @@
+node_modules/
+npm-debug.log*
+.DS_Store
+*.tgz
+*.tar.gz
+.env
+.env.*
+
+# Local Claude/Codex session state should stay on each machine.
+.codex/
+sessions.json

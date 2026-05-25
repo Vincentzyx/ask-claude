@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ask-claude": {
+      "command": "npx",
+      "args": ["-y", "ask-claude"]
+    }
+  }
+}

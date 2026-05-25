@@ -1,0 +1,40 @@
+{
+  "name": "ask-claude",
+  "version": "0.1.0",
+  "description": "Ask Claude Code for second opinions from Codex through MCP and ACP.",
+  "author": {
+    "name": "Vincentzyx"
+  },
+  "homepage": "https://github.com/Vincentzyx/ask-claude",
+  "repository": "https://github.com/Vincentzyx/ask-claude",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "codex",
+    "acp",
+    "code-review",
+    "second-opinion"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Ask Claude",
+    "shortDescription": "Ask Claude Code for reviews and second opinions from Codex.",
+    "longDescription": "Ask Claude connects Codex to Claude Code through a local MCP server and ACP. It keeps multi-turn Claude sessions, surfaces context and cost signals, and supports review or discussion loops where Codex can challenge Claude's findings before reporting back.",
+    "developerName": "Vincentzyx",
+    "category": "Productivity",
+    "capabilities": [
+      "MCP",
+      "Skills",
+      "Code review"
+    ],
+    "defaultPrompt": [
+      "Ask Claude to review this change.",
+      "Discuss this bug with Claude.",
+      "Have Claude challenge this design."
+    ],
+    "brandColor": "#D97706"
+  }
+}

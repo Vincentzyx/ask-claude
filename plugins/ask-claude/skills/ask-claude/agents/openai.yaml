@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ask Claude"
+  short_description: "Discuss with Claude Code through ACP-backed MCP sessions."
+  default_prompt: "Ask Claude to review this change and debate any disagreements until the findings converge."
