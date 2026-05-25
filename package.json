@@ -21,10 +21,11 @@
     "second-opinion"
   ],
   "bin": {
-    "ask-claude": "./plugins/ask-claude/server.mjs"
+    "ask-claude": "server.mjs"
   },
   "files": [
     ".agents",
+    "server.mjs",
     "plugins/ask-claude/.codex-plugin",
     "plugins/ask-claude/.mcp.json",
     "plugins/ask-claude/server.mjs",
