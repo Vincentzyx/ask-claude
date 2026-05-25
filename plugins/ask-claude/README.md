@@ -2,6 +2,8 @@
 
 Ask Claude lets Codex consult Claude Code for second opinions through MCP and ACP. It is packaged as both a Codex plugin marketplace entry and an npm MCP server.
 
+[中文说明](README.zh-CN.md)
+
 ## What It Provides
 
 - `ask_claude`: start or continue a multi-turn Claude Code session for discussion, review, bug hunting, and disagreement resolution.
@@ -40,6 +42,28 @@ The plugin launches the MCP server with:
 npx -y ask-claude
 ```
 
+Codex currently may not show a settings button for MCP servers that come from plugins. If you need
+custom environment variables for Claude defaults, proxies, or longer tool timeouts, add an explicit
+MCP entry in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.ask-claude]
+command = "npx"
+args = ["-y", "ask-claude"]
+startup_timeout_sec = 60
+tool_timeout_sec = 900
+
+[mcp_servers.ask-claude.env]
+ASK_CLAUDE_DEFAULT_MODEL = "opus"
+ASK_CLAUDE_DEFAULT_EFFORT = "high"
+HTTPS_PROXY = "http://proxy.example:8080"
+HTTP_PROXY = "http://proxy.example:8080"
+ALL_PROXY = "http://proxy.example:8080"
+```
+
+Restart Codex after changing `~/.codex/config.toml` so the MCP server is relaunched with the new
+environment.
+
 ## Manual MCP Setup
 
 If you only want the MCP server, register it directly:
@@ -71,8 +95,11 @@ The server does not read any extra config file. It inherits the environment supp
 
 ```toml
 [mcp_servers.ask-claude.env]
+ASK_CLAUDE_DEFAULT_MODEL = "opus"
+ASK_CLAUDE_DEFAULT_EFFORT = "high"
 HTTPS_PROXY = "http://proxy.example:8080"
 HTTP_PROXY = "http://proxy.example:8080"
+ALL_PROXY = "http://proxy.example:8080"
 NO_PROXY = "localhost,127.0.0.1"
 ```
 

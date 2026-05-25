@@ -32,6 +32,8 @@
     "plugins/ask-claude/scripts",
     "plugins/ask-claude/skills",
     "README.md",
+    "README.zh-CN.md",
+    "plugins/ask-claude/README.zh-CN.md",
     "LICENSE"
   ],
   "scripts": {
