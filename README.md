@@ -37,18 +37,16 @@ codex plugin add ask-claude@ask-claude
 The plugin launches the MCP server with:
 
 ```bash
-npx -y github:Vincentzyx/ask-claude
+npx -y ask-claude
 ```
 
 ## Manual MCP Setup
 
-If you only want the MCP server, register it directly from GitHub:
+If you only want the MCP server, register it directly:
 
 ```bash
-codex mcp add ask-claude -- npx -y github:Vincentzyx/ask-claude
+codex mcp add ask-claude -- npx -y ask-claude
 ```
-
-If the npm package is published later, `npx -y ask-claude` is the shorter equivalent.
 
 For a source checkout:
 
@@ -64,7 +62,7 @@ For long Claude reviews, configure the Codex-side tool timeout:
 ```toml
 [mcp_servers.ask-claude]
 command = "npx"
-args = ["-y", "github:Vincentzyx/ask-claude"]
+args = ["-y", "ask-claude"]
 startup_timeout_sec = 60
 tool_timeout_sec = 900
 ```
