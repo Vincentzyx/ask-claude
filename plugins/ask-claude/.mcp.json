@@ -2,7 +2,7 @@
   "mcpServers": {
     "ask-claude": {
       "command": "npx",
-      "args": ["-y", "ask-claude"]
+      "args": ["-y", "github:Vincentzyx/ask-claude"]
     }
   }
 }

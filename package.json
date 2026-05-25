@@ -1,0 +1,48 @@
+{
+  "name": "ask-claude",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Ask Claude Code for second opinions from Codex through MCP and ACP",
+  "author": "Vincentzyx",
+  "license": "MIT",
+  "homepage": "https://github.com/Vincentzyx/ask-claude",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vincentzyx/ask-claude.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "codex",
+    "acp",
+    "ask-claude",
+    "code-review",
+    "second-opinion"
+  ],
+  "bin": {
+    "ask-claude": "./plugins/ask-claude/server.mjs"
+  },
+  "files": [
+    ".agents",
+    "plugins/ask-claude/.codex-plugin",
+    "plugins/ask-claude/.mcp.json",
+    "plugins/ask-claude/server.mjs",
+    "plugins/ask-claude/scripts",
+    "plugins/ask-claude/skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node plugins/ask-claude/server.mjs",
+    "smoke": "node plugins/ask-claude/scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "^0.37.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
