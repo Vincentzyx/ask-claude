@@ -942,13 +942,15 @@ server.registerTool("ask_claude", {
 }, async (args, extra) => {
   const sessionArgs = withSessionDefaults(args);
   try {
-    const session = await bridge.getOrCreateSession(sessionArgs, { signal: extra.signal });
+    // Do not pass the MCP request cancellation signal into Claude. Some Codex clients
+    // time out the tool call before Claude finishes; continuing in the background lets
+    // `ask_claude_sessions` expose the completed answer preview afterwards.
+    const session = await bridge.getOrCreateSession(sessionArgs);
     session.permissionPolicy = normalizePermissionPolicy(sessionArgs.permission_policy || session.permissionPolicy);
     const result = await bridge.runPrompt(session, sessionArgs.prompt, {
       timeoutMs: sessionArgs.timeout_ms || DEFAULT_TIMEOUT_MS,
       maxAnswerChars: sessionArgs.max_answer_chars || MAX_ANSWER_CHARS,
       progressReporter: makeProgressReporter(extra, "Claude ask"),
-      signal: extra.signal,
     });
     const formatted = formatClaudeResult("Claude discussion result", result);
     return asTextResult(formatted.text, formatted.structured);
