@@ -7,6 +7,7 @@ Ask Claude 让 Codex 通过 MCP 和 ACP 向本机 Claude Code 请教问题。它
 ## 提供什么
 
 - `ask_claude`：启动或继续一个 Claude Code 多轮会话，用于讨论、代码 review、bug hunting 和分歧复核。
+- `ask_claude_result`：获取之前某一轮 Claude 的完整已存储回复，适合 Codex 外层超时后补拉结果。
 - `ask_claude_sessions`：列出活跃和历史 Claude 会话，包括上下文、成本、会话年龄和 prefix cache 是否可能已经冷掉。
 - 一个 Codex skill，告诉 Codex 什么时候该问 Claude、如何复用会话、以及如何反驳或复核 Claude 的可疑结论。
 - 支持通过 tool 参数或环境变量配置 Claude 模型、reasoning effort、权限策略和超时时间。
@@ -107,6 +108,7 @@ NO_PROXY = "localhost,127.0.0.1"
 | Tool | 用途 |
 | --- | --- |
 | `ask_claude` | 启动或继续一个 Claude Code ACP 会话，用于讨论、review、找 bug 或继续复核分歧。 |
+| `ask_claude_result` | 按 `session_id`、`session_key`、`turn_id` 或最近 turn 获取已存储的 Claude 回复。 |
 | `ask_claude_sessions` | 列出活跃和历史会话，包括上下文使用量、成本、最近活跃时间和 cache-cold 提示。 |
 
 `ask_claude` 的关键参数：
@@ -169,6 +171,7 @@ ASK_CLAUDE_CONFIG_TIMEOUT_MS=60s
 | `ASK_CLAUDE_DEFAULT_EFFORT` | 未设置 | 默认 reasoning effort，例如 `low`、`medium`、`high`、`xhigh`、`max` 或 `default`。 |
 | `ASK_CLAUDE_DEFAULT_MODE` | 未设置 | 默认 Claude Code mode，例如 `default`、`plan` 或 `acceptEdits`。 |
 | `ASK_CLAUDE_DEFAULT_PERMISSION_POLICY` | `readonly` | 默认 MCP 侧权限策略。 |
+| `ASK_CLAUDE_MAX_STORED_ANSWER_CHARS` | `200000` | 每个 turn 最多保存多少 Claude 回复文本，供之后 `ask_claude_result` 拉取。 |
 | `CLAUDE_ACP_COMMAND` | bundled adapter | 覆盖启动 Claude ACP adapter 的命令。 |
 | `CLAUDE_ACP_ARGS` | bundled adapter entrypoint | adapter 参数的 JSON 数组。如果设置了 `CLAUDE_ACP_COMMAND` 但省略这个变量，则不传额外参数。 |
 
@@ -190,7 +193,7 @@ ASK_CLAUDE_DEFAULT_PERMISSION_POLICY = "readonly"
 - `allow_edits_and_commands`
 - `allow_all`
 
-session registry 会在本机保存简短的 prompt 和 answer preview，用于会话选择。它不应该被提交或分享。
+session registry 会在本机保存简短的 prompt preview 和 Claude 回复文本；每个 turn 的回复文本受 `ASK_CLAUDE_MAX_STORED_ANSWER_CHARS` 限制。它用于会话选择和超时后的结果恢复，不应该被提交或分享。
 
 ## 开发
 

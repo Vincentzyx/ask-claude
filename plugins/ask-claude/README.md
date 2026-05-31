@@ -7,6 +7,7 @@ Ask Claude lets Codex consult Claude Code for second opinions through MCP and AC
 ## What It Provides
 
 - `ask_claude`: start or continue a multi-turn Claude Code session for discussion, review, bug hunting, and disagreement resolution.
+- `ask_claude_result`: fetch a full stored Claude answer from a previous turn, useful after client-side timeouts.
 - `ask_claude_sessions`: list active and remembered Claude sessions with context, cost, age, and cache-cold hints.
 - A Codex skill that teaches Codex when to ask Claude, how to reuse sessions, and how to challenge questionable findings.
 - Configurable Claude model, reasoning effort, permission policy, and timeouts through tool arguments or environment variables.
@@ -110,6 +111,7 @@ Restart Codex after changing MCP config so the stdio server is relaunched with t
 | Tool | Purpose |
 | --- | --- |
 | `ask_claude` | Start or continue a Claude Code ACP session for discussion, review, bug hunting, or follow-up disagreement resolution. |
+| `ask_claude_result` | Fetch a stored Claude answer by `session_id`, `session_key`, `turn_id`, or latest turn offset. |
 | `ask_claude_sessions` | List active and remembered sessions, including context usage, cost, last activity, and cache-cold hints. |
 
 Key `ask_claude` arguments:
@@ -172,6 +174,7 @@ Useful environment variables:
 | `ASK_CLAUDE_DEFAULT_EFFORT` | unset | Default reasoning effort, such as `low`, `medium`, `high`, `xhigh`, `max`, or `default`. |
 | `ASK_CLAUDE_DEFAULT_MODE` | unset | Default Claude Code mode, such as `default`, `plan`, or `acceptEdits`. |
 | `ASK_CLAUDE_DEFAULT_PERMISSION_POLICY` | `readonly` | Default MCP-side permission policy. |
+| `ASK_CLAUDE_MAX_STORED_ANSWER_CHARS` | `200000` | Maximum Claude answer text stored per turn for later `ask_claude_result` retrieval. |
 | `CLAUDE_ACP_COMMAND` | bundled adapter | Override command used to start the Claude ACP adapter. |
 | `CLAUDE_ACP_ARGS` | bundled adapter entrypoint | JSON array of adapter args. If `CLAUDE_ACP_COMMAND` is set and this is omitted, no extra args are passed. |
 
@@ -193,7 +196,7 @@ The default `readonly` permission policy rejects Claude Code edit and shell-comm
 - `allow_edits_and_commands`
 - `allow_all`
 
-The session registry stores short prompt and answer previews on the local machine. It is intended for session selection and should not be committed or shared.
+The session registry stores short prompt previews and Claude answer text on the local machine, capped by `ASK_CLAUDE_MAX_STORED_ANSWER_CHARS` per turn. It is intended for session selection and timeout recovery and should not be committed or shared.
 
 ## Development
 

@@ -34,6 +34,19 @@ Key arguments:
 
 For reviews, put the review instructions directly in `prompt`, including relevant file paths, the current problem, and whether Claude should inspect the git diff. For follow-ups or disagreements, call `ask_claude` again with the same `session_id` or `session_key`.
 
+### `ask_claude_result`
+
+Use after an `ask_claude` call timed out in the MCP client but may have continued in the background, or when the session list preview is too short.
+
+Key arguments:
+
+- `session_id`: exact Claude session id from `ask_claude_sessions`.
+- `session_key` plus `cwd`: locate the newest matching session by stable key.
+- `turn_id`: exact stored turn id from `ask_claude_sessions`.
+- `turn_offset`: `0` for latest, `1` for previous, and so on.
+- `max_answer_chars`: optional cap for returned answer text. Defaults to the full stored answer.
+- `include_prompt`: include the stored prompt preview.
+
 ### `ask_claude_sessions`
 
 Use before deciding whether to resume a session. The response includes:
@@ -45,7 +58,7 @@ Use before deciding whether to resume a session. The response includes:
 - `large_context`
 - `recommendation`
 - `usage`
-- recent turn previews
+- recent turn previews, `turn_id`, answer length, and whether a full stored answer is available
 
 If `recommendation` is `ask_before_resuming_large_cold_session`, do not resume casually. Resume only if the old context is genuinely valuable.
 
@@ -59,7 +72,7 @@ $HOME/.codex/ask-claude/sessions.json
 
 Override the directory with `ASK_CLAUDE_REGISTRY_DIR`.
 
-The registry stores session ids, keys, cwd, latest usage/cost, last active time, and short turn previews. It does not replace Claude's own conversation store; it is an index for Codex to make reuse decisions.
+The registry stores session ids, keys, cwd, latest usage/cost, last active time, short turn previews, and full Claude answer text up to `ASK_CLAUDE_MAX_STORED_ANSWER_CHARS` characters per turn. It does not replace Claude's own conversation store; it is an index for Codex to make reuse decisions and recover answers after client-side timeouts.
 
 ## ACP Usage Updates
 

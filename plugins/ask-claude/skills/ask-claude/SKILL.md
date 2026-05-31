@@ -14,15 +14,17 @@ Use the local `ask-claude` MCP server as a persistent bridge to Claude Code thro
 3. Reuse an active/recent Claude session when it matches the current task.
 4. If an inactive session is older than 1 hour, treat provider prefix cache as likely cold. Resume it only when the saved history is valuable enough to justify the cost.
 5. For review, use `ask_claude` and clearly prompt Claude to inspect the relevant files, git diff, or implementation area.
-6. Compare Claude's findings against your own reading of the code. Do not blindly accept them.
-7. If you disagree with a material point, call `ask_claude` again with the same `session_id` or `session_key`, and explain the disagreement with concrete code references.
-8. Continue until there are no major unresolved disagreements, or until further debate is not adding signal.
-9. Final answer should integrate both views and clearly mark which issues are confirmed, rejected, or uncertain.
+6. If the `ask_claude` tool call times out in Codex, call `ask_claude_sessions` and then `ask_claude_result` for the matching session; Claude may have completed in the background.
+7. Compare Claude's findings against your own reading of the code. Do not blindly accept them.
+8. If you disagree with a material point, call `ask_claude` again with the same `session_id` or `session_key`, and explain the disagreement with concrete code references.
+9. Continue until there are no major unresolved disagreements, or until further debate is not adding signal.
+10. Final answer should integrate both views and clearly mark which issues are confirmed, rejected, or uncertain.
 
 ## Tool Selection
 
 - `ask_claude`: open or continue a discussion with Claude. Use it for review, bug hunts, second opinions, follow-up challenges, and disagreement resolution. Pass the current problem, relevant file paths, what you already inspected, and whether Claude should inspect the current diff.
 - `ask_claude_sessions`: inspect active and remembered sessions, context usage, cost, last active time, and cache-cold recommendations.
+- `ask_claude_result`: fetch a full stored answer for a previous Claude turn. Use it after client-side timeouts or when the session list preview is insufficient.
 
 ## Context And Cost
 

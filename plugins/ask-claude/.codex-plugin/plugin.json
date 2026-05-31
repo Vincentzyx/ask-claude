@@ -1,6 +1,6 @@
 {
   "name": "ask-claude",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Ask Claude Code for second opinions from Codex through MCP and ACP.",
   "author": {
     "name": "Vincentzyx"

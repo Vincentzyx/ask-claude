@@ -26,6 +26,7 @@ const ACP_ARGS = process.env.CLAUDE_ACP_ARGS
     : DEFAULT_ACP_ADAPTER.args;
 
 const MAX_ANSWER_CHARS = 80_000;
+const MAX_STORED_ANSWER_CHARS = envPositiveInt("ASK_CLAUDE_MAX_STORED_ANSWER_CHARS", 200_000);
 let DEFAULT_TIMEOUT_MS = envDurationMs("ASK_CLAUDE_PROMPT_TIMEOUT_MS", 15 * 60 * 1000);
 let ACP_INIT_TIMEOUT_MS = envDurationMs("ASK_CLAUDE_INIT_TIMEOUT_MS", 60_000);
 let ACP_CONFIG_TIMEOUT_MS = envDurationMs("ASK_CLAUDE_CONFIG_TIMEOUT_MS", 60_000);
@@ -126,6 +127,15 @@ function envEnum(name, values, fallback) {
   return fallback;
 }
 
+function envPositiveInt(name, fallback) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw.trim());
+  if (Number.isInteger(parsed) && parsed > 0) return parsed;
+  log(`ignoring invalid ${name}=${raw}; using ${fallback}`);
+  return fallback;
+}
+
 function refreshTimeoutConfig() {
   DEFAULT_TIMEOUT_MS = envDurationMs("ASK_CLAUDE_PROMPT_TIMEOUT_MS", 15 * 60 * 1000);
   ACP_INIT_TIMEOUT_MS = envDurationMs("ASK_CLAUDE_INIT_TIMEOUT_MS", 60_000);
@@ -143,6 +153,33 @@ function truncate(value, maxChars = 4000) {
 
 function preview(value, maxChars = 1000) {
   return truncate(String(value || "").replace(/\s+/g, " ").trim(), maxChars);
+}
+
+function storedAnswer(text) {
+  const value = String(text || "");
+  const truncated = value.length > MAX_STORED_ANSWER_CHARS;
+  return {
+    answer: truncated ? value.slice(0, MAX_STORED_ANSWER_CHARS) : value,
+    answer_chars: value.length,
+    stored_answer_chars: Math.min(value.length, MAX_STORED_ANSWER_CHARS),
+    answer_truncated: truncated,
+  };
+}
+
+function turnSummary(turn) {
+  return {
+    turn_id: turn.turn_id,
+    at: turn.at,
+    prompt_preview: turn.prompt_preview,
+    answer_preview: turn.answer_preview,
+    answer_chars: turn.answer_chars ?? turn.answer_preview?.length ?? 0,
+    stored_answer_chars: turn.stored_answer_chars ?? turn.answer?.length ?? turn.answer_preview?.length ?? 0,
+    answer_truncated: Boolean(turn.answer_truncated),
+    has_full_answer: typeof turn.answer === "string",
+    stop_reason: turn.stop_reason,
+    usage: turn.usage,
+    tool_count: turn.tool_count,
+  };
 }
 
 function ageInfo(isoTime) {
@@ -812,7 +849,9 @@ class ClaudeAcpBridge {
     }
     collector.maybeReportProgress("completed", true);
 
-    const answer = truncate(collector.answerParts.join(""), maxAnswerChars);
+    const fullAnswer = collector.answerParts.join("");
+    const answer = truncate(fullAnswer, maxAnswerChars);
+    const stored = storedAnswer(fullAnswer);
     const now = new Date().toISOString();
     session.latestUsage = collector.latestUsage || session.latestUsage;
     if (!session.title) session.title = preview(prompt, 80);
@@ -831,9 +870,14 @@ class ClaudeAcpBridge {
       latest_usage: session.latestUsage,
       title: session.title,
       turn: {
+        turn_id: randomUUID(),
         at: now,
         prompt_preview: preview(prompt, 1600),
-        answer_preview: preview(answer, 2000),
+        answer: stored.answer,
+        answer_preview: preview(fullAnswer, 2000),
+        answer_chars: stored.answer_chars,
+        stored_answer_chars: stored.stored_answer_chars,
+        answer_truncated: stored.answer_truncated,
         stop_reason: result?.stopReason,
         usage: result?.usage,
         tool_count: tools.length,
@@ -895,9 +939,93 @@ function formatClaudeResult(prefix, data) {
   };
 }
 
+function resolveRegistrySession(args) {
+  const entries = Object.values(bridge.registry.sessions);
+  if (args.session_id) {
+    const entry = bridge.registry.sessions[args.session_id];
+    if (!entry) throw new Error(`Unknown Claude session_id: ${args.session_id}`);
+    return entry;
+  }
+
+  const cwdFilter = args.cwd ? absCwd(args.cwd) : null;
+  if (!args.session_key && !cwdFilter) {
+    throw new Error("Provide session_id, session_key, or cwd to identify a Claude session.");
+  }
+
+  const matches = entries
+    .filter((entry) => !cwdFilter || entry.cwd === cwdFilter)
+    .filter((entry) => {
+      if (!args.session_key) return true;
+      const exactKey = cwdFilter ? `${cwdFilter}::${args.session_key}` : args.session_key;
+      return entry.session_key === exactKey ||
+        (!cwdFilter && entry.session_key?.endsWith(`::${args.session_key}`));
+    })
+    .sort((a, b) => new Date(b.last_active_at || b.created_at).getTime() - new Date(a.last_active_at || a.created_at).getTime());
+
+  if (!matches.length) {
+    throw new Error("No Claude session matched the provided filters.");
+  }
+  return matches[0];
+}
+
+function selectTurn(entry, { turn_id: turnId, turn_offset: turnOffset = 0 } = {}) {
+  const turns = entry.turns || [];
+  if (!turns.length) throw new Error(`Claude session has no stored turns: ${entry.session_id}`);
+  if (turnId) {
+    const turn = turns.find((item) => item.turn_id === turnId);
+    if (!turn) throw new Error(`Unknown Claude turn_id for session ${entry.session_id}: ${turnId}`);
+    return turn;
+  }
+  const index = turns.length - 1 - turnOffset;
+  if (index < 0 || index >= turns.length) {
+    throw new Error(`turn_offset ${turnOffset} is outside the stored turn range for session ${entry.session_id}`);
+  }
+  return turns[index];
+}
+
+function formatStoredResult(entry, turn, { maxAnswerChars, includePrompt }) {
+  const rawAnswer = typeof turn.answer === "string" ? turn.answer : turn.answer_preview || "";
+  const answerLimit = maxAnswerChars || rawAnswer.length || MAX_STORED_ANSWER_CHARS;
+  const answer = truncate(rawAnswer, answerLimit);
+  const summary = turnSummary(turn);
+  const outputTruncated = rawAnswer.length > answerLimit;
+  const lines = [
+    "Claude stored result",
+    "",
+    `Claude session: ${entry.session_id}`,
+    `Turn: ${turn.turn_id || "(legacy turn without id)"}`,
+    `Workspace: ${entry.cwd}`,
+    `At: ${turn.at || "(unknown)"}`,
+    `Answer chars: ${summary.answer_chars}`,
+  ];
+  if (summary.answer_truncated) {
+    lines.push(`Warning: stored answer was truncated at ${summary.stored_answer_chars} chars. Increase ASK_CLAUDE_MAX_STORED_ANSWER_CHARS for future turns if needed.`);
+  }
+  if (outputTruncated) {
+    lines.push(`Warning: response truncated by max_answer_chars=${answerLimit}.`);
+  }
+  if (includePrompt) {
+    lines.push("", "Prompt preview:", turn.prompt_preview || "(no prompt preview)");
+  }
+  lines.push("", "Claude says:", answer || "(no stored text response)");
+  return {
+    text: lines.join("\n"),
+    structured: {
+      session_id: entry.session_id,
+      session_key: entry.session_key,
+      cwd: entry.cwd,
+      turn: summary,
+      prompt_preview: includePrompt ? turn.prompt_preview : undefined,
+      answer,
+      answer_output_truncated: outputTruncated,
+      stored_answer_truncated: summary.answer_truncated,
+    },
+  };
+}
+
 const server = new McpServer({
   name: "ask-claude",
-  version: "0.1.0",
+  version: "0.1.3",
 }, {
   capabilities: {
     logging: {},
@@ -962,6 +1090,29 @@ server.registerTool("ask_claude", {
   }
 });
 
+server.registerTool("ask_claude_result", {
+  title: "Get Claude Result",
+  description: "Fetch a stored Claude turn answer from the local registry. Use after a long ask_claude call times out in the client but may have completed in the background.",
+  inputSchema: {
+    cwd: z.string().optional().describe("Workspace path filter. Useful with session_key or to get the latest session in a workspace."),
+    session_id: z.string().optional().describe("Exact Claude session id."),
+    session_key: z.string().optional().describe("Stable session key used with ask_claude, such as review:<repo>:<branch>."),
+    turn_id: z.string().optional().describe("Exact stored turn id. If omitted, returns the latest matching turn."),
+    turn_offset: z.number().int().nonnegative().optional().describe("0 for latest, 1 for previous, and so on. Ignored when turn_id is set."),
+    max_answer_chars: z.number().int().positive().optional().describe("Maximum answer characters to return. Defaults to the full stored answer."),
+    include_prompt: z.boolean().optional().describe("Include the stored prompt preview. Defaults to false."),
+  },
+}, async (args) => {
+  await bridge.ensureRegistryLoaded();
+  const entry = resolveRegistrySession(args);
+  const turn = selectTurn(entry, args);
+  const formatted = formatStoredResult(entry, turn, {
+    maxAnswerChars: args.max_answer_chars,
+    includePrompt: args.include_prompt === true,
+  });
+  return asTextResult(formatted.text, formatted.structured);
+});
+
 server.registerTool("ask_claude_sessions", {
   title: "List Claude Sessions",
   description: "List active and remembered Claude ACP sessions, including last-active time, context/cost status, and cache-cold recommendations.",
@@ -1003,7 +1154,7 @@ server.registerTool("ask_claude_sessions", {
         recommendation,
         permission_policy: entry.permission_policy,
         usage,
-        recent_turns: (entry.turns || []).slice(-5),
+        recent_turns: (entry.turns || []).slice(-5).map(turnSummary),
       };
     })
     .sort((a, b) => new Date(b.last_active_at || b.created_at).getTime() - new Date(a.last_active_at || a.created_at).getTime());
