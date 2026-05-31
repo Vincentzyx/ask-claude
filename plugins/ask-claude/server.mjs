@@ -36,6 +36,7 @@ const LARGE_CONTEXT_TOKENS = 50_000;
 const PROGRESS_HEARTBEAT_MS = 5_000;
 const PROGRESS_MIN_INTERVAL_MS = 2_000;
 const PROGRESS_CHAR_DELTA = 500;
+const ADAPTER_SHUTDOWN_GRACE_MS = 2_000;
 const MODEL_VALUES = ["default", "sonnet[1m]", "opus", "haiku"];
 const EFFORT_VALUES = ["default", "low", "medium", "high", "xhigh", "max"];
 const MODE_VALUES = ["auto", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
@@ -54,6 +55,28 @@ const DEFAULT_PERMISSION_POLICY =
 
 function log(...args) {
   console.error("[ask-claude]", ...args);
+}
+
+function codedError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function isAbortLike(error) {
+  return error?.code === "ASK_CLAUDE_CANCELLED" ||
+    error?.name === "AbortError" ||
+    error?.message === "Request was cancelled";
+}
+
+function shouldRestartAdapter(error) {
+  return error?.code === "ASK_CLAUDE_TIMEOUT" || isAbortLike(error);
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw codedError("Request was cancelled", "ASK_CLAUDE_CANCELLED");
+  }
 }
 
 function resolveDefaultAcpAdapter() {
@@ -340,6 +363,7 @@ class ClaudeAcpBridge {
         cwd: DEFAULT_CWD,
         stdio: ["pipe", "pipe", "pipe"],
         env: process.env,
+        detached: process.platform !== "win32",
       });
       this.child = child;
       this.buffer = "";
@@ -376,10 +400,48 @@ class ClaudeAcpBridge {
         this.agentCapabilities = result.agentCapabilities;
         log("adapter initialized", result.agentInfo || {});
         resolve();
-      }).catch(reject);
+      }).catch((error) => {
+        this.stopAdapter(`initialize failed: ${error.message}`).finally(() => reject(error));
+      });
     });
 
     return this.startPromise;
+  }
+
+  async stopAdapter(reason = "stop") {
+    const child = this.child;
+    if (!child || child.killed) return;
+    log("stopping ACP adapter:", reason);
+    const targetPid = child.pid;
+    const killTarget = process.platform === "win32" ? targetPid : -targetPid;
+    const kill = (signal) => {
+      try {
+        process.kill(killTarget, signal);
+      } catch {
+        try {
+          child.kill(signal);
+        } catch {
+          // Process may already have exited.
+        }
+      }
+    };
+
+    kill("SIGTERM");
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(graceTimer);
+        child.off("exit", finish);
+        resolve();
+      };
+      const graceTimer = setTimeout(() => {
+        kill("SIGKILL");
+        finish();
+      }, ADAPTER_SHUTDOWN_GRACE_MS);
+      child.once("exit", finish);
+    });
   }
 
   handleStdout(data) {
@@ -495,24 +557,45 @@ class ClaudeAcpBridge {
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
-  async send(method, params, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  async send(method, params, timeoutMs = DEFAULT_TIMEOUT_MS, { signal } = {}) {
     if (!this.child || this.child.killed) {
       throw new Error("ACP adapter is not running");
     }
+    throwIfAborted(signal);
     const id = this.nextId++;
     const message = { jsonrpc: "2.0", id, method, params };
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (signal) signal.removeEventListener("abort", onAbort);
+      };
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
         this.pending.delete(id);
-        reject(new Error(`Timeout waiting for ${method}`));
+        cleanup();
+        reject(error);
+      };
+      const succeed = (result) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(result);
+      };
+      const onAbort = () => fail(codedError("Request was cancelled", "ASK_CLAUDE_CANCELLED"));
+      const timer = setTimeout(() => {
+        fail(codedError(`Timeout waiting for ${method}`, "ASK_CLAUDE_TIMEOUT"));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer, method });
+      if (signal) signal.addEventListener("abort", onAbort, { once: true });
+      this.pending.set(id, { resolve: succeed, reject: fail, timer, method });
       this.child.stdin.write(`${JSON.stringify(message)}\n`);
     });
   }
 
-  async createSession({ cwd, sessionKey, model, effort, mode, permissionPolicy }) {
+  async createSession({ cwd, sessionKey, model, effort, mode, permissionPolicy }, { signal } = {}) {
     await this.ensureStarted();
+    throwIfAborted(signal);
     const resolvedCwd = absCwd(cwd);
     if (!existsSync(resolvedCwd)) {
       throw new Error(`cwd does not exist: ${resolvedCwd}`);
@@ -520,7 +603,7 @@ class ClaudeAcpBridge {
     const result = await this.send("session/new", {
       cwd: resolvedCwd,
       mcpServers: [],
-    });
+    }, DEFAULT_TIMEOUT_MS, { signal });
 
     const session = {
       id: result.sessionId,
@@ -537,17 +620,18 @@ class ClaudeAcpBridge {
     this.sessions.set(session.id, session);
     if (sessionKey) this.sessionsByKey.set(sessionKey, session.id);
 
-    await this.configureSession(session, { mode, model, effort });
+    await this.configureSession(session, { mode, model, effort }, { signal });
     await this.upsertRegistryEntry(session);
     return session;
   }
 
-  async configureSession(session, { model, effort, mode }) {
+  async configureSession(session, { model, effort, mode }, { signal } = {}) {
     for (const [configId, value] of [
       ["mode", mode],
       ["model", model],
       ["effort", effort],
     ]) {
+      throwIfAborted(signal);
       if (!value) continue;
       const option = session.configOptions.find((item) => item.id === configId);
       if (!option) {
@@ -563,16 +647,18 @@ class ClaudeAcpBridge {
           sessionId: session.id,
           configId,
           value,
-        }, ACP_CONFIG_TIMEOUT_MS);
+        }, ACP_CONFIG_TIMEOUT_MS, { signal });
         session.configOptions = result.configOptions || session.configOptions;
       } catch (error) {
+        if (shouldRestartAdapter(error)) throw error;
         session.warnings.push(`Failed to set ${configId}=${value}: ${error.message}`);
       }
     }
   }
 
-  async resumeSessionFromRegistry(entry, args = {}) {
+  async resumeSessionFromRegistry(entry, args = {}, { signal } = {}) {
     await this.ensureStarted();
+    throwIfAborted(signal);
     const resolvedCwd = absCwd(args.cwd || entry.cwd);
     const method = this.agentCapabilities?.sessionCapabilities?.resume ? "session/resume" : "session/load";
     const timeoutMs = method === "session/resume" ? ACP_RESUME_TIMEOUT_MS : ACP_LOAD_TIMEOUT_MS;
@@ -582,14 +668,14 @@ class ClaudeAcpBridge {
         sessionId: entry.session_id,
         cwd: resolvedCwd,
         mcpServers: [],
-      }, timeoutMs);
+      }, timeoutMs, { signal });
     } catch (firstError) {
       if (method === "session/resume" && this.agentCapabilities?.loadSession) {
         result = await this.send("session/load", {
           sessionId: entry.session_id,
           cwd: resolvedCwd,
           mcpServers: [],
-        }, ACP_LOAD_TIMEOUT_MS);
+        }, ACP_LOAD_TIMEOUT_MS, { signal });
       } else {
         throw firstError;
       }
@@ -614,24 +700,25 @@ class ClaudeAcpBridge {
     }
     this.sessions.set(session.id, session);
     if (session.key) this.sessionsByKey.set(session.key, session.id);
-    await this.configureSession(session, args);
+    await this.configureSession(session, args, { signal });
     await this.upsertRegistryEntry(session, { warnings: session.warnings });
     return session;
   }
 
-  async getOrCreateSession(args) {
+  async getOrCreateSession(args, { signal } = {}) {
     await this.ensureRegistryLoaded();
     await this.ensureStarted();
+    throwIfAborted(signal);
     if (args.session_id) {
       const session = this.sessions.get(args.session_id);
       if (!session) {
         const entry = this.registry.sessions[args.session_id];
         if (entry && args.reuse_policy !== "never") {
-          return this.resumeSessionFromRegistry(entry, args);
+          return this.resumeSessionFromRegistry(entry, args, { signal });
         }
         throw new Error(`Unknown Claude session_id: ${args.session_id}`);
       }
-      await this.configureSession(session, args);
+      await this.configureSession(session, args, { signal });
       return session;
     }
 
@@ -654,7 +741,7 @@ class ClaudeAcpBridge {
         const age = ageInfo(entry.last_active_at);
         const large = (entry.latest_usage?.used || 0) >= LARGE_CONTEXT_TOKENS;
         if (args.reuse_policy === "always" || !age.cache_likely_cold || large) {
-          return this.resumeSessionFromRegistry(entry, args);
+          return this.resumeSessionFromRegistry(entry, args, { signal });
         }
       }
     }
@@ -666,13 +753,14 @@ class ClaudeAcpBridge {
       effort: args.effort,
       mode: args.mode,
       permissionPolicy: args.permission_policy,
-    });
+    }, { signal });
   }
 
-  async runPrompt(session, prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, maxAnswerChars = MAX_ANSWER_CHARS, progressReporter = null } = {}) {
+  async runPrompt(session, prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, maxAnswerChars = MAX_ANSWER_CHARS, progressReporter = null, signal } = {}) {
     if (this.activeCollectors.has(session.id)) {
       throw new Error(`Claude session already has an active prompt: ${session.id}`);
     }
+    throwIfAborted(signal);
     const startedAt = Date.now();
     const collector = {
       answerParts: [],
@@ -712,7 +800,12 @@ class ClaudeAcpBridge {
       result = await this.send("session/prompt", {
         sessionId: session.id,
         prompt: [{ type: "text", text: prompt }],
-      }, timeoutMs);
+      }, timeoutMs, { signal });
+    } catch (error) {
+      if (shouldRestartAdapter(error)) {
+        await this.stopAdapter(`prompt interrupted: ${error.message}`);
+      }
+      throw error;
     } finally {
       if (heartbeat) clearInterval(heartbeat);
       this.activeCollectors.delete(session.id);
@@ -848,15 +941,23 @@ server.registerTool("ask_claude", {
   },
 }, async (args, extra) => {
   const sessionArgs = withSessionDefaults(args);
-  const session = await bridge.getOrCreateSession(sessionArgs);
-  session.permissionPolicy = normalizePermissionPolicy(sessionArgs.permission_policy || session.permissionPolicy);
-  const result = await bridge.runPrompt(session, sessionArgs.prompt, {
-    timeoutMs: sessionArgs.timeout_ms || DEFAULT_TIMEOUT_MS,
-    maxAnswerChars: sessionArgs.max_answer_chars || MAX_ANSWER_CHARS,
-    progressReporter: makeProgressReporter(extra, "Claude ask"),
-  });
-  const formatted = formatClaudeResult("Claude discussion result", result);
-  return asTextResult(formatted.text, formatted.structured);
+  try {
+    const session = await bridge.getOrCreateSession(sessionArgs, { signal: extra.signal });
+    session.permissionPolicy = normalizePermissionPolicy(sessionArgs.permission_policy || session.permissionPolicy);
+    const result = await bridge.runPrompt(session, sessionArgs.prompt, {
+      timeoutMs: sessionArgs.timeout_ms || DEFAULT_TIMEOUT_MS,
+      maxAnswerChars: sessionArgs.max_answer_chars || MAX_ANSWER_CHARS,
+      progressReporter: makeProgressReporter(extra, "Claude ask"),
+      signal: extra.signal,
+    });
+    const formatted = formatClaudeResult("Claude discussion result", result);
+    return asTextResult(formatted.text, formatted.structured);
+  } catch (error) {
+    if (shouldRestartAdapter(error)) {
+      await bridge.stopAdapter(`request interrupted: ${error.message}`);
+    }
+    throw error;
+  }
 });
 
 server.registerTool("ask_claude_sessions", {
@@ -908,6 +1009,15 @@ server.registerTool("ask_claude_sessions", {
   return asTextResult(JSON.stringify({ sessions }, null, 2), { sessions });
 });
 
+let shuttingDown = false;
+
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await bridge.stopAdapter(`server ${signal}`);
+  process.exit(0);
+}
+
 async function main() {
   refreshTimeoutConfig();
   const transport = new StdioServerTransport();
@@ -919,7 +1029,11 @@ main().catch((error) => {
   process.exit(1);
 });
 
-process.on("SIGINT", () => process.exit(0));
-process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => {
+  shutdown("SIGINT").catch(() => process.exit(1));
+});
+process.on("SIGTERM", () => {
+  shutdown("SIGTERM").catch(() => process.exit(1));
+});
 
 export { ClaudeAcpBridge };
